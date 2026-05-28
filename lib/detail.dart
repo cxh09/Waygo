@@ -6,6 +6,7 @@ import 'package:x_amap_base/x_amap_base.dart';
 import 'search.dart';
 import 'favorites_service.dart';
 import 'route_planning_page.dart';
+import 'place_detail_service.dart';
 
 class DetailPage extends StatefulWidget {
   final SearchResult place;
@@ -22,12 +23,44 @@ class _DetailPageState extends State<DetailPage> {
   AMapController? _mapController;
   final Set<Marker> _markers = {};
   bool _isFavorite = false;
+  PlaceDetail? _placeDetail;
+  bool _isLoadingDetail = false;
 
   @override
   void initState() {
     super.initState();
     _addMarker();
     _checkFavoriteStatus();
+    _loadPlaceDetail();
+  }
+
+  Future<void> _loadPlaceDetail() async {
+    final poiId = widget.place.id;
+    if (poiId == null || poiId.isEmpty) {
+      debugPrint('[DetailPage] poiId is null or empty, skip loading detail');
+      return;
+    }
+    
+    setState(() {
+      _isLoadingDetail = true;
+    });
+    
+    try {
+      final detail = await PlaceDetailService.getPlaceDetail(poiId);
+      if (mounted) {
+        setState(() {
+          _placeDetail = detail;
+          _isLoadingDetail = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[DetailPage] loadPlaceDetail error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingDetail = false;
+        });
+      }
+    }
   }
 
   Future<void> _checkFavoriteStatus() async {
@@ -94,6 +127,34 @@ class _DetailPageState extends State<DetailPage> {
     });
   }
 
+  Widget _buildInfoRow(IconData icon, String text, {VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: Colors.grey[500]),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[700],
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (onTap != null)
+              Icon(Icons.copy, size: 14, color: Colors.grey[400]),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showMoreInfo() {
     showModalBottomSheet(
       context: context,
@@ -110,7 +171,7 @@ class _DetailPageState extends State<DetailPage> {
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
               ),
               constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.5,
+                maxHeight: MediaQuery.of(context).size.height * 0.6,
               ),
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -307,12 +368,41 @@ class _DetailPageState extends State<DetailPage> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // 地名和地址
-                      Text(
-                        widget.place.name,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.place.name,
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          if (_placeDetail?.rating != null && _placeDetail!.rating!.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.orange[50],
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.star, size: 14, color: Colors.orange[600]),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _placeDetail!.rating!,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.orange[700],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -322,6 +412,52 @@ class _DetailPageState extends State<DetailPage> {
                           color: Colors.grey[600],
                         ),
                       ),
+                      if (_placeDetail?.type != null && _placeDetail!.type!.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _placeDetail!.type!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      
+                      // 电话和营业时间
+                      if (_placeDetail != null) ...[
+                        if (_placeDetail!.phone != null && _placeDetail!.phone!.isNotEmpty)
+                          _buildInfoRow(Icons.phone, _placeDetail!.phone!, onTap: () async {
+                            await Clipboard.setData(ClipboardData(text: _placeDetail!.phone!));
+                            _showTopToast('电话已复制');
+                          }),
+                        if (_placeDetail!.openTime != null && _placeDetail!.openTime!.isNotEmpty)
+                          _buildInfoRow(Icons.access_time, _placeDetail!.openTime!),
+                        if (_placeDetail!.cost != null && _placeDetail!.cost!.isNotEmpty)
+                          _buildInfoRow(Icons.attach_money, '人均 ${_placeDetail!.cost!}'),
+                        const SizedBox(height: 12),
+                      ] else if (_isLoadingDetail)
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.grey[400],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '加载详情中...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[500],
+                              ),
+                            ),
+                          ],
+                        ),
+                      
                       const SizedBox(height: 16),
 
                       // 操作按钮

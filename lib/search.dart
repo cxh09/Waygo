@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 const String _amapKey = '0f206954e6a24d40a66b42dc3fd24d01';
 
 class SearchResult {
+  final String? id;
   final String name;
   final String address;
   final String province;
@@ -19,6 +20,7 @@ class SearchResult {
   final double? distance;
 
   const SearchResult({
+    this.id,
     required this.name,
     required this.address,
     this.province = '',
@@ -64,6 +66,7 @@ class SearchService {
         distance = _calculateDistance(currentLat, currentLng, lat, lng);
       }
       return SearchResult(
+        id: p['id'] as String?,
         name: p['name'] ?? '',
         address: p['address'] ?? '',
         province: p['pname'] ?? '',
@@ -285,7 +288,7 @@ class _SearchWidgetState extends State<SearchWidget> {
           ),
         ),
         ),
-        if (_isSearchFocused && (_searchResults.isNotEmpty || _searchError != null || _isSearching || (_searchController.text.trim().isEmpty && _searchHistory.isNotEmpty)))
+        if (_isSearchFocused && !_isSearching && (_searchResults.isNotEmpty || _searchError != null || (_searchController.text.trim().isEmpty && _searchHistory.isNotEmpty)))
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: BackdropFilter(
@@ -298,14 +301,7 @@ class _SearchWidgetState extends State<SearchWidget> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.grey[300]!, width: 1),
                 ),
-                child: _isSearching
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: CircularProgressIndicator(),
-                    ),
-                  )
-                : _searchError != null
+                child: _searchError != null
                     ? Center(
                         child: Padding(
                           padding: const EdgeInsets.all(24),

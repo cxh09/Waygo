@@ -238,7 +238,7 @@ class RouteService {
     );
   }
 
-  static Future<RoutePlan> planTransit({
+  static Future<List<RoutePlan>> planTransit({
     required double originLat,
     required double originLng,
     required double destLat,
@@ -270,101 +270,110 @@ class RouteService {
     final transits = route['transits'] as List?;
     debugPrint('[RouteService] planTransit transits count: ${transits?.length ?? 0}');
     if (transits == null || transits.isEmpty) {
+      final distance = _doubleValue(route['distance']);
+      debugPrint('[RouteService] planTransit no transit found, distance: $distance');
+      if (distance > 0 && distance < 500) {
+        throw Exception('距离仅${distance.toStringAsFixed(0)}米，建议直接步行前往');
+      }
       throw Exception('未找到公交路线');
     }
-    final transit = transits[0] as Map<String, dynamic>;
-    final distance = _doubleValue(transit['distance']);
-    final duration = _intValue(transit['duration']);
-    final walkingDistance = _doubleValue(transit['walking_distance'], defaultValue: 0);
-    final segments = transit['segments'] as List;
-    debugPrint('[RouteService] planTransit: distance=$distance, duration=$duration, segments=${segments.length}, walkingDistance=$walkingDistance');
 
-    final routeSegments = <RouteSegment>[];
-    final allPolylinePoints = <LatLng>[];
+    final plans = <RoutePlan>[];
+    for (int i = 0; i < transits.length; i++) {
+      final transit = transits[i] as Map<String, dynamic>;
+      final distance = _doubleValue(transit['distance']);
+      final duration = _intValue(transit['duration']);
+      final walkingDistance = _doubleValue(transit['walking_distance'], defaultValue: 0);
+      final segments = transit['segments'] as List;
+      debugPrint('[RouteService] planTransit route $i: distance=$distance, duration=$duration, segments=${segments.length}, walkingDistance=$walkingDistance');
 
-    for (final segment in segments) {
-      final segMap = segment as Map<String, dynamic>;
+      final routeSegments = <RouteSegment>[];
+      final allPolylinePoints = <LatLng>[];
 
-      if (segMap['walking'] != null) {
-        final walking = segMap['walking'] as Map<String, dynamic>;
-        final walkSteps = walking['steps'] as List? ?? [];
-        debugPrint('[RouteService] planTransit walking steps: ${walkSteps.length}');
+      for (final segment in segments) {
+        final segMap = segment as Map<String, dynamic>;
 
-        for (final step in walkSteps) {
-          final stepMap = step as Map<String, dynamic>;
-          final instruction = _stringValue(stepMap['instruction']);
-          final stepDist = _doubleValue(stepMap['distance']);
-          final stepDur = _intValue(stepMap['duration']);
-          final polylineStr = stepMap['polyline'] as String? ?? '';
-          final stepPoints = _parsePolyline(polylineStr);
+        if (segMap['walking'] != null) {
+          final walking = segMap['walking'] as Map<String, dynamic>;
+          final walkSteps = walking['steps'] as List? ?? [];
 
+          for (final step in walkSteps) {
+            final stepMap = step as Map<String, dynamic>;
+            final instruction = _stringValue(stepMap['instruction']);
+            final stepDist = _doubleValue(stepMap['distance']);
+            final stepDur = _intValue(stepMap['duration']);
+            final polylineStr = stepMap['polyline'] as String? ?? '';
+            final stepPoints = _parsePolyline(polylineStr);
+
+            routeSegments.add(RouteSegment(
+              instruction: instruction,
+              distance: stepDist,
+              duration: stepDur,
+              vehicle: '步行',
+              polylinePoints: stepPoints,
+            ));
+            allPolylinePoints.addAll(stepPoints);
+          }
+        }
+
+        if (segMap['bus'] != null) {
+          final bus = segMap['bus'] as Map<String, dynamic>;
+          final buslines = bus['buslines'] as List? ?? [];
+          for (final busline in buslines) {
+            final busMap = busline as Map<String, dynamic>;
+            final busName = _stringValue(busMap['name']);
+            final busDistance = _doubleValue(busMap['distance']);
+            final busDuration = _intValue(busMap['duration']);
+            final polylineStr = busMap['polyline'] as String? ?? '';
+            final busPoints = _parsePolyline(polylineStr);
+
+            final instruction = busName.isNotEmpty ? '乘坐 $busName' : '乘坐公交';
+            routeSegments.add(RouteSegment(
+              instruction: instruction,
+              distance: busDistance,
+              duration: busDuration,
+              vehicle: busName,
+              polylinePoints: busPoints,
+            ));
+            allPolylinePoints.addAll(busPoints);
+          }
+        }
+
+        if (segMap['railway'] != null) {
+          final railway = segMap['railway'] as Map<String, dynamic>;
+          final trainName = _stringValue(railway['name']);
+          final trip = _stringValue(railway['trip']);
+          final departStop = railway['departure_stop']?['name'] ?? '';
+          final arrivalStop = railway['arrival_stop']?['name'] ?? '';
+          final railDuration = _intValue(railway['time']);
+          final polylineStr = railway['polyline'] as String? ?? '';
+          final railPoints = _parsePolyline(polylineStr);
+
+          final instruction = trainName.isNotEmpty
+              ? '乘坐 $trainName 从 $departStop 到 $arrivalStop'
+              : '乘坐火车';
           routeSegments.add(RouteSegment(
             instruction: instruction,
-            distance: stepDist,
-            duration: stepDur,
-            vehicle: '步行',
-            polylinePoints: stepPoints,
+            distance: _doubleValue(railway['distance']),
+            duration: railDuration,
+            vehicle: trip.isNotEmpty ? trip : trainName,
+            polylinePoints: railPoints,
           ));
-          allPolylinePoints.addAll(stepPoints);
+          allPolylinePoints.addAll(railPoints);
         }
       }
 
-      if (segMap['bus'] != null) {
-        final bus = segMap['bus'] as Map<String, dynamic>;
-        final buslines = bus['buslines'] as List? ?? [];
-        debugPrint('[RouteService] planTransit buslines count: ${buslines.length}');
-        for (final busline in buslines) {
-          final busMap = busline as Map<String, dynamic>;
-          final busName = _stringValue(busMap['name']);
-          final busDistance = _doubleValue(busMap['distance']);
-          final busDuration = _intValue(busMap['duration']);
-          final polylineStr = busMap['polyline'] as String? ?? '';
-          final busPoints = _parsePolyline(polylineStr);
-
-          final instruction = busName.isNotEmpty ? '乘坐 $busName' : '乘坐公交';
-          routeSegments.add(RouteSegment(
-            instruction: instruction,
-            distance: busDistance,
-            duration: busDuration,
-            vehicle: busName,
-            polylinePoints: busPoints,
-          ));
-          allPolylinePoints.addAll(busPoints);
-        }
-      }
-
-      if (segMap['railway'] != null) {
-        final railway = segMap['railway'] as Map<String, dynamic>;
-        final trainName = _stringValue(railway['name']);
-        final trip = _stringValue(railway['trip']);
-        final departStop = railway['departure_stop']?['name'] ?? '';
-        final arrivalStop = railway['arrival_stop']?['name'] ?? '';
-        final railDuration = _intValue(railway['time']);
-        final polylineStr = railway['polyline'] as String? ?? '';
-        final railPoints = _parsePolyline(polylineStr);
-
-        final instruction = trainName.isNotEmpty
-            ? '乘坐 $trainName 从 $departStop 到 $arrivalStop'
-            : '乘坐火车';
-        routeSegments.add(RouteSegment(
-          instruction: instruction,
-          distance: _doubleValue(railway['distance']),
-          duration: railDuration,
-          vehicle: trip.isNotEmpty ? trip : trainName,
-          polylinePoints: railPoints,
-        ));
-        allPolylinePoints.addAll(railPoints);
-      }
+      plans.add(RoutePlan(
+        mode: TravelMode.transit,
+        distance: distance,
+        duration: duration,
+        segments: routeSegments,
+        polylinePoints: allPolylinePoints,
+        walkingDistance: walkingDistance,
+      ));
     }
 
-    debugPrint('[RouteService] planTransit done: total polyline points=${allPolylinePoints.length}');
-    return RoutePlan(
-      mode: TravelMode.transit,
-      distance: distance,
-      duration: duration,
-      segments: routeSegments,
-      polylinePoints: allPolylinePoints,
-      walkingDistance: walkingDistance,
-    );
+    debugPrint('[RouteService] planTransit done: total plans=${plans.length}');
+    return plans;
   }
 }

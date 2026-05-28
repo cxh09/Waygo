@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:amap_map/amap_map.dart';
-import 'package:x_amap_base/x_amap_base.dart';
 import 'package:http/http.dart' as http;
 import 'package:location/location.dart' as location_pkg;
 import 'search.dart';
@@ -30,12 +28,11 @@ class RoutePlanningPage extends StatefulWidget {
 }
 
 class _RoutePlanningPageState extends State<RoutePlanningPage> {
-  AMapController? _mapController;
-  Set<Marker> _markers = {};
-  Set<Polyline> _polylines = {};
   TravelMode _selectedMode = TravelMode.transit;
   bool _isLoading = false;
   RoutePlan? _routePlan;
+  List<RoutePlan> _transitPlans = [];
+  int _selectedTransitIndex = 0;
   String? _errorMessage;
   SearchResult? _startPoint;
   SearchResult? _endPoint;
@@ -56,7 +53,6 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
     debugPrint('[RoutePlanning] currentLat: ${widget.currentLat}, currentLng: ${widget.currentLng}');
     _startPoint = widget.startPoint;
     _endPoint = widget.endPoint;
-    _addMarkers();
     _autoPlanRoute();
   }
 
@@ -65,69 +61,6 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
     debugPrint('[RoutePlanning] === dispose ===');
     _searchDebounce?.cancel();
     super.dispose();
-  }
-
-  void _addMarkers() {
-    debugPrint('[RoutePlanning] _addMarkers: start=${_startPoint?.name}, end=${_endPoint?.name}');
-    final newMarkers = <Marker>{};
-    if (_startPoint != null) {
-      newMarkers.add(
-        Marker(
-          position: LatLng(_startPoint!.lat, _startPoint!.lng),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-          anchor: const Offset(0.5, 1.0),
-        ),
-      );
-    }
-    if (_endPoint != null) {
-      newMarkers.add(
-        Marker(
-          position: LatLng(_endPoint!.lat, _endPoint!.lng),
-          icon: BitmapDescriptor.defaultMarker,
-          anchor: const Offset(0.5, 1.0),
-        ),
-      );
-    }
-    _markers = newMarkers;
-    debugPrint('[RoutePlanning] _addMarkers done, total markers: ${_markers.length}');
-  }
-
-  void _onMapCreated(AMapController controller) {
-    debugPrint('[RoutePlanning] _onMapCreated');
-    _mapController = controller;
-    _fitMapToBounds();
-  }
-
-  void _fitMapToBounds() {
-    if (_startPoint != null && _endPoint != null) {
-      final latMin = _startPoint!.lat < _endPoint!.lat ? _startPoint!.lat : _endPoint!.lat;
-      final latMax = _startPoint!.lat > _endPoint!.lat ? _startPoint!.lat : _endPoint!.lat;
-      final lngMin = _startPoint!.lng < _endPoint!.lng ? _startPoint!.lng : _endPoint!.lng;
-      final lngMax = _startPoint!.lng > _endPoint!.lng ? _startPoint!.lng : _endPoint!.lng;
-      final centerLat = (latMin + latMax) / 2;
-      final centerLng = (lngMin + lngMax) / 2;
-      debugPrint('[RoutePlanning] _fitMapToBounds: center=($centerLat, $centerLng), zoom=14');
-      _mapController?.moveCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: LatLng(centerLat, centerLng),
-            zoom: 14,
-          ),
-        ),
-      );
-    } else if (_endPoint != null) {
-      debugPrint('[RoutePlanning] _fitMapToBounds: only endPoint, zoom=15');
-      _mapController?.moveCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: LatLng(_endPoint!.lat, _endPoint!.lng),
-            zoom: 15,
-          ),
-        ),
-      );
-    } else {
-      debugPrint('[RoutePlanning] _fitMapToBounds: no points available');
-    }
   }
 
   Future<void> _autoPlanRoute() async {
@@ -157,7 +90,6 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
           lng: widget.currentLng!,
         );
         _startPoint = currentPos;
-        _addMarkers();
       } else {
         debugPrint('[RoutePlanning] No passed position, trying to acquire location directly...');
         try {
@@ -174,7 +106,6 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
               lng: loc.longitude!,
             );
             _startPoint = currentPos;
-            _addMarkers();
           } else {
             debugPrint('[RoutePlanning] Acquired location is invalid: (${loc.latitude}, ${loc.longitude})');
             if (mounted) setState(() => _errorMessage = '无法获取当前位置，请点击起点手动选择');
@@ -192,36 +123,46 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
       _isLoading = true;
       _errorMessage = null;
       _routePlan = null;
-      _polylines = {};
+      _transitPlans = [];
+      _selectedTransitIndex = 0;
     });
 
     try {
-      RoutePlan plan;
       switch (_selectedMode) {
         case TravelMode.walking:
           debugPrint('[RoutePlanning] Calling RouteService.planWalking...');
-          plan = await RouteService.planWalking(
+          final plan = await RouteService.planWalking(
             originLat: _startPoint!.lat,
             originLng: _startPoint!.lng,
             destLat: _endPoint!.lat,
             destLng: _endPoint!.lng,
           );
           debugPrint('[RoutePlanning] planWalking succeeded: dist=${plan.distance}, dur=${plan.duration}, segments=${plan.segments.length}');
+          if (!mounted) return;
+          setState(() {
+            _routePlan = plan;
+            _isLoading = false;
+          });
           break;
         case TravelMode.driving:
           debugPrint('[RoutePlanning] Calling RouteService.planDriving...');
-          plan = await RouteService.planDriving(
+          final plan = await RouteService.planDriving(
             originLat: _startPoint!.lat,
             originLng: _startPoint!.lng,
             destLat: _endPoint!.lat,
             destLng: _endPoint!.lng,
           );
           debugPrint('[RoutePlanning] planDriving succeeded: dist=${plan.distance}, dur=${plan.duration}, segments=${plan.segments.length}');
+          if (!mounted) return;
+          setState(() {
+            _routePlan = plan;
+            _isLoading = false;
+          });
           break;
         case TravelMode.transit:
           final city = _startPoint!.city.isNotEmpty ? _startPoint!.city : await _getCityName(_startPoint!.lat, _startPoint!.lng);
           debugPrint('[RoutePlanning] Calling RouteService.planTransit with city=$city...');
-          plan = await RouteService.planTransit(
+          final plans = await RouteService.planTransit(
             originLat: _startPoint!.lat,
             originLng: _startPoint!.lng,
             destLat: _endPoint!.lat,
@@ -229,31 +170,17 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
             city: city,
             cityD: _endPoint!.city.isNotEmpty ? _endPoint!.city : null,
           );
-          debugPrint('[RoutePlanning] planTransit succeeded: dist=${plan.distance}, dur=${plan.duration}, segments=${plan.segments.length}');
+          debugPrint('[RoutePlanning] planTransit succeeded: ${plans.length} plans');
+          if (!mounted) return;
+          setState(() {
+            _transitPlans = plans;
+            if (plans.isNotEmpty) {
+              _routePlan = plans[0];
+            }
+            _isLoading = false;
+          });
           break;
       }
-
-      if (!mounted) {
-        debugPrint('[RoutePlanning] Widget not mounted after API call, aborting');
-        return;
-      }
-
-      debugPrint('[RoutePlanning] Polyline points count: ${plan.polylinePoints.length}');
-      final routeColor = _getRouteColor(_selectedMode);
-      final polyline = Polyline(
-        points: plan.polylinePoints,
-        width: 8,
-        color: routeColor,
-        alpha: 0.9,
-      );
-
-      setState(() {
-        _routePlan = plan;
-        _polylines = {polyline};
-        _isLoading = false;
-      });
-
-      _fitMapToBounds();
       debugPrint('[RoutePlanning] === _planRoute completed successfully ===');
     } on TimeoutException {
       debugPrint('[RoutePlanning] ERROR: TimeoutException - request timed out');
@@ -269,17 +196,6 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Color _getRouteColor(TravelMode mode) {
-    switch (mode) {
-      case TravelMode.transit:
-        return const Color(0xFF10B981);
-      case TravelMode.walking:
-        return const Color(0xFF3B82F6);
-      case TravelMode.driving:
-        return const Color(0xFFF59E0B);
     }
   }
 
@@ -330,13 +246,11 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
       final temp = _startPoint;
       _startPoint = _endPoint;
       _endPoint = temp;
-      _markers = {};
-      _polylines = {};
       _routePlan = null;
+      _transitPlans = [];
+      _selectedTransitIndex = 0;
       _errorMessage = null;
     });
-    _addMarkers();
-    _fitMapToBounds();
     _planRoute();
   }
 
@@ -408,13 +322,11 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
         _endPoint = result;
       }
       _showSearch = false;
-      _markers = {};
-      _polylines = {};
       _routePlan = null;
+      _transitPlans = [];
+      _selectedTransitIndex = 0;
       _errorMessage = null;
     });
-    _addMarkers();
-    _fitMapToBounds();
     _planRoute();
   }
 
@@ -521,12 +433,41 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: AMapWidget(
-              mapType: MapType.normal,
-              scaleEnabled: false,
-              onMapCreated: _onMapCreated,
-              markers: _markers,
-              polylines: _polylines,
+            child: Container(
+              color: Colors.grey[100],
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.map_outlined,
+                      size: 64,
+                      color: Colors.grey[400],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      '路线规划',
+                      style: TextStyle(
+                        fontSize: 18,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (_startPoint != null && _endPoint != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_startPoint!.name} → ${_endPoint!.name}',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[500],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
 
@@ -682,8 +623,9 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
                     debugPrint('[RoutePlanning] Mode switched to: ${mode.$2}');
                     setState(() {
                       _selectedMode = mode.$1;
-                      _polylines = {};
                       _routePlan = null;
+                      _transitPlans = [];
+                      _selectedTransitIndex = 0;
                       _errorMessage = null;
                     });
                     _planRoute();
@@ -721,6 +663,8 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
 
   Widget _buildResultPanel(BuildContext context) {
     final plan = _routePlan!;
+    final showTransitOptions = _selectedMode == TravelMode.transit && _transitPlans.length > 1;
+
     return Positioned(
       bottom: 0,
       left: 0,
@@ -735,7 +679,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
               borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             ),
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.4,
+              maxHeight: MediaQuery.of(context).size.height * 0.5,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -749,25 +693,93 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      _buildInfoChip(Icons.timer_outlined, plan.durationText, Colors.blue),
-                      const SizedBox(width: 12),
-                      _buildInfoChip(Icons.straighten, plan.distanceText, Colors.green),
-                      if (plan.walkingDistance != null && plan.walkingDistance! > 0) ...[
-                        const SizedBox(width: 12),
-                        _buildInfoChip(
-                          Icons.directions_walk,
-                          '步行${_formatDistance(plan.walkingDistance!)}',
-                          Colors.orange,
-                        ),
-                      ],
-                    ],
+                if (showTransitOptions) ...[
+                  SizedBox(
+                    height: 80,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: _transitPlans.length,
+                      itemBuilder: (context, index) {
+                        final transitPlan = _transitPlans[index];
+                        final isSelected = index == _selectedTransitIndex;
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _selectedTransitIndex = index;
+                              _routePlan = transitPlan;
+                            });
+                          },
+                          child: Container(
+                            width: 120,
+                            margin: const EdgeInsets.only(right: 8),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isSelected ? Colors.blue[50] : Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isSelected ? Colors.blue : Colors.transparent,
+                                width: 2,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  transitPlan.durationText,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: isSelected ? Colors.blue : Colors.black87,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  transitPlan.distanceText,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                if (transitPlan.walkingDistance != null && transitPlan.walkingDistance! > 0)
+                                  Text(
+                                    '步行${_formatDistance(transitPlan.walkingDistance!)}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.orange[600],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
+                  const Divider(height: 1),
+                ],
+                if (!showTransitOptions)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        _buildInfoChip(Icons.timer_outlined, plan.durationText, Colors.blue),
+                        const SizedBox(width: 12),
+                        _buildInfoChip(Icons.straighten, plan.distanceText, Colors.green),
+                        if (plan.walkingDistance != null && plan.walkingDistance! > 0) ...[
+                          const SizedBox(width: 12),
+                          _buildInfoChip(
+                            Icons.directions_walk,
+                            '步行${_formatDistance(plan.walkingDistance!)}',
+                            Colors.orange,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                if (!showTransitOptions)
+                  const SizedBox(height: 8),
                 const Divider(height: 1),
                 Flexible(
                   child: ListView.builder(
